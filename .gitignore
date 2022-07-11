@@ -1,0 +1,4 @@
+
+venv/
+.vim/coc-settings.json
+.DS_Store
