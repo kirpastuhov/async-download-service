@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 
@@ -6,35 +7,44 @@ from aiohttp import web
 from loguru import logger
 
 
-def verify_path(path: str):
-    return os.path.exists(path)
-
-
 async def archive(request):
     archive_hash = request.match_info.get("archive_hash")
-    archive_path = os.path.join("test_photos", archive_hash)
+    archive_path = os.path.join(args.photo_dir, archive_hash)
 
-    if not verify_path(archive_path):
+    if not os.path.exists(archive_path):
         raise web.HTTPNotFound(text="Archive with such name doesn't exist")
 
     response = web.StreamResponse()
-    response.headers["Content-Disposition"] = f'attachment; filename="{archive_hash}.zip"'
+    response.headers["Content-Disposition"] = f"attachment; filename={archive_hash}.zip"
 
     await response.prepare(request)
 
-    i = 1
+    i = 0
     buffer_size = 100_000  # bytes
     cmd = f"zip -r -j - {archive_path}"
     proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 
-    while True:
-        i += 1
-        stdout = await proc.stdout.read(n=buffer_size)
-        logger.debug("Sending archive chunk...")
-        await response.write(stdout)
-
-        if proc.stdout.at_eof():
-            break
+    try:
+        while not proc.stdout.at_eof():
+            i += 1
+            stdout = await proc.stdout.read(n=buffer_size)
+            logger.debug(f"Sending archive chunk # {i}...")
+            await response.write(stdout)
+            await asyncio.sleep(args.delay)
+        await response.write_eof()
+        logger.info("Archive sent")
+    except asyncio.CancelledError:
+        response.force_close()
+        logger.error("Download was cancelled")
+        raise
+    except Exception as e:
+        response.force_close()
+        logger.error("Server error " + str(e))
+        return web.HTTPServerError()
+    finally:
+        if proc.returncode != 0:
+            proc.kill()
+            await proc.communicate()
 
 
 async def handle_index_page(request):
@@ -43,7 +53,10 @@ async def handle_index_page(request):
     return web.Response(text=index_contents, content_type="text/html")
 
 
-if __name__ == "__main__":
+def main():
+    if args.quiet:
+        logger.disable(__name__)
+
     app = web.Application()
     app.add_routes(
         [
@@ -52,3 +65,13 @@ if __name__ == "__main__":
         ]
     )
     web.run_app(app)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Server settings")
+    parser.add_argument("--quiet", action=argparse.BooleanOptionalAction, help="Enable/disable logging")
+    parser.add_argument("--photo_dir", dest="photo_dir", type=str, default="test_photos", help="Directory with photos.")
+    parser.add_argument("--delay", dest="delay", default=0, type=int, help="Response delay in seconds")
+
+    args = parser.parse_args()
+    main()
