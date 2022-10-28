@@ -8,8 +8,11 @@ from loguru import logger
 
 
 async def archive(request):
-    archive_hash = request.match_info.get("archive_hash")
-    archive_path = os.path.join(args.photo_dir, archive_hash)
+    photo_dir = request.app["photo_dir"]
+    delay = request.app["delay"]
+
+    archive_hash = request.match_info["archive_hash"]
+    archive_path = os.path.join(photo_dir, archive_hash)
 
     if not os.path.exists(archive_path):
         raise web.HTTPNotFound(text="Archive with such name doesn't exist")
@@ -19,18 +22,18 @@ async def archive(request):
 
     await response.prepare(request)
 
-    i = 0
+    chunk_number = 0
     buffer_size = 100_000  # bytes
-    cmd = f"zip -r -j - {archive_path}"
+    cmd = f"zip -rq - {archive_path}"
     proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 
     try:
         while not proc.stdout.at_eof():
-            i += 1
+            chunk_number += 1
             stdout = await proc.stdout.read(n=buffer_size)
-            logger.debug(f"Sending archive chunk # {i}...")
+            logger.debug(f"Sending archive chunk # {chunk_number}...")
             await response.write(stdout)
-            await asyncio.sleep(args.delay)
+            await asyncio.sleep(delay)
         await response.write_eof()
         logger.info("Archive sent")
     except asyncio.CancelledError:
@@ -39,10 +42,10 @@ async def archive(request):
         raise
     except Exception as e:
         response.force_close()
-        logger.error("Server error " + str(e))
+        logger.error(f"Server error {str(e)}")
         return web.HTTPServerError()
     finally:
-        if proc.returncode != 0:
+        if proc.returncode is not None:
             proc.kill()
             await proc.communicate()
 
@@ -54,10 +57,20 @@ async def handle_index_page(request):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Server settings")
+    parser.add_argument("--quiet", action=argparse.BooleanOptionalAction, help="Enable/disable logging")
+    parser.add_argument("--photo_dir", dest="photo_dir", type=str, default="test_photos", help="Directory with photos.")
+    parser.add_argument("--delay", dest="delay", default=0, type=int, help="Response delay in seconds")
+    args = parser.parse_args()
+
     if args.quiet:
         logger.disable(__name__)
 
     app = web.Application()
+
+    app["delay"] = args.delay
+    app["photo_dir"] = args.photo_dir
+
     app.add_routes(
         [
             web.get("/", handle_index_page),
@@ -68,10 +81,4 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Server settings")
-    parser.add_argument("--quiet", action=argparse.BooleanOptionalAction, help="Enable/disable logging")
-    parser.add_argument("--photo_dir", dest="photo_dir", type=str, default="test_photos", help="Directory with photos.")
-    parser.add_argument("--delay", dest="delay", default=0, type=int, help="Response delay in seconds")
-
-    args = parser.parse_args()
     main()
