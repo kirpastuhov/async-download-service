@@ -12,9 +12,8 @@ async def archive(request):
     delay = request.app["delay"]
 
     archive_hash = request.match_info["archive_hash"]
-    archive_path = os.path.join(photo_dir, archive_hash)
 
-    if not os.path.exists(archive_path):
+    if not os.path.exists(os.path.join(photo_dir, archive_hash)):
         raise web.HTTPNotFound(text="Archive with such name doesn't exist")
 
     response = web.StreamResponse()
@@ -24,8 +23,8 @@ async def archive(request):
 
     chunk_number = 0
     buffer_size = 100_000  # bytes
-    cmd = f"zip -rq - {archive_path}"
-    proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    cmd = f"zip -rq - {archive_hash}"
+    proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=photo_dir)
 
     try:
         while not proc.stdout.at_eof():
